@@ -1,3 +1,6 @@
+import cv2
+import numpy as np
+
 class Point:
     def __init__(self, x, y):
         self.x = x
@@ -10,10 +13,13 @@ class Point:
         return self._y
 
     def norm(self):
-        return Point(cv2.norm(self.x), cv2.norm(self.y))
+        return cv2.norm((self.x, self.y))
 
     def sqrt(self):
         return Point(np.sqrt(self.x), np.sqrt(self.y))
+
+    def tup(self):
+        return self.x, self.y
 
     def __add__(self, other):
         if type(other) == type(self):

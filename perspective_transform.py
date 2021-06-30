@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 from point import Point
+import ctypes as c
 
 
 # 행렬 교차점
@@ -178,8 +179,7 @@ def sort_4_points(image, points):
 def find_triangle_area(p1, p2, p3):
     sides = [Point.norm(p1 - p2), Point.norm(p2 - p3), Point.norm(p3 - p1)]
     s = (sides[0] + sides[1] + sides[2]) / 2
-
-    return Point.sqrt(s * (s - sides[0]) * (s - sides[1]) * (s - sides[2]))
+    return np.sqrt(s * (s - sides[0]) * (s - sides[1]) * (s - sides[2]))
 
 
 def find_rect_area(points):
@@ -318,7 +318,6 @@ def perspective(image):
 
     # 꼭지점 정렬
     finish = sort_4_points(tmp, final_points)
-    print(finish)
     # 일부 포인트가 둘 이상 존재하는지 확인 Check if some points exist more than one
     for p in finish:
         repeat = 0
@@ -332,35 +331,35 @@ def perspective(image):
              Point.norm(finish[2] - finish[3]),
              Point.norm(finish[3] - finish[0])]
 
+
     width_output = dists[0] if dists[0] > dists[2] else dists[2]
     height_output = dists[1] if dists[1] > dists[3] else dists[3]
     width_output *= 1.1
     height_output *= 1.1
     out_size = (width_output, height_output)
 
-    print(out_size)
-
     # Ignore if rectangle is too small
     src_img_area = tmp.shape[1] * tmp.shape[0]
-
-    # if (src_img_area / (find_rect_area(finish) * ratio_rect(finish))) > 20:
-    #     return tmp.copy()
-
+    if (src_img_area / (find_rect_area(finish) * ratio_rect(finish))) > 20:
+        return tmp.copy()
+    # width_output = width_output.tup()
+    # height_output = height_output.tup()
     if len(final_lines) == 4:
         p, q = [], []
-        p.append(finish[0])
+        p.append(finish[0].tup())
         q.append((0, 0))
 
-        p.append(finish[1])
+        p.append(finish[1].tup())
         q.append((width_output, 0))
 
-        p.append(finish[2])
+        p.append(finish[2].tup())
         q.append((width_output, height_output))
 
-        p.append(finish[3])
+        p.append(finish[3].tup())
         q.append((0, height_output))
 
         p = np.float32(p)
+
         q = np.float32(q)
 
         rotation = cv2.getPerspectiveTransform(p, q)
@@ -374,9 +373,18 @@ def perspective(image):
 
 
 if __name__ == "__main__":
-    input_dir = 'C:/Users/home/Desktop/perspect/crop/'
+    input_dir = 'C:/Users/home/Desktop/perspect/img/'
     output_dir = 'C:/Users/home/Desktop/perspect/result/'
     file_list = os.listdir(input_dir)
 
-    input = cv2.imread('C:/Users/home/Desktop/perspect/img/1.jpg')
-    perspective(input)
+    for path in os.listdir(input_dir):
+        img = cv2.imread(input_dir + path)
+        result = perspective(img)
+        cv2.imwrite(output_dir + path, result)
+
+    # dll = c.windll.LoadLibrary('perspective_final.dll')
+    # for path in os.listdir(input_dir):
+    #     myfunc = dll['perspective']
+    #     myfunc.argtypes = (c.c_char_p, c.c_char_p)
+    #     myfunc.restype = c.c_int
+    #     myfunc(b'C:/Users/home/Desktop/perspect/img/' + path.encode(), b'C:/Users/home/Desktop/perspect/resultDll/' + path.encode())
