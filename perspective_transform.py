@@ -1,7 +1,8 @@
 import os
 import cv2
 import numpy as np
-from point import Point
+from core.point import Point
+import math
 import ctypes as c
 
 
@@ -39,7 +40,6 @@ def find_intersection_coordinates(image, lines):
             rho2, theta2 = line2[0][0], line2[0][1]
             inter_x, inter_y = 0.0, 0.0
             pi_result, inter_x, inter_y = parametricIntersect(rho1, theta1, rho2, theta2, inter_x, inter_y)
-
             if pi_result \
                     and is_point_within_given_rectangle(inter_x, inter_y, x_min, x_max, y_min, y_max):
                 check = False
@@ -331,7 +331,6 @@ def perspective(image):
              Point.norm(finish[2] - finish[3]),
              Point.norm(finish[3] - finish[0])]
 
-
     width_output = dists[0] if dists[0] > dists[2] else dists[2]
     height_output = dists[1] if dists[1] > dists[3] else dists[3]
     width_output *= 1.1
@@ -359,32 +358,272 @@ def perspective(image):
         q.append((0, height_output))
 
         p = np.float32(p)
-
         q = np.float32(q)
 
         rotation = cv2.getPerspectiveTransform(p, q)
 
         final_result = cv2.warpPerspective(tmp, rotation, (int(out_size[0]), int(out_size[1])))
-
         print("perspective_transform 완료")
         return final_result
 
     return tmp.copy()
 
 
+def order_points(pts):
+    rect = np.zeros((4, 2), dtype="float32")
+
+    s = pts.sum(axis=1)
+
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+
+    return rect
+
+
+def hough(img):
+    lines = cv2.HoughLines(img, 1, math.pi / 180, 250)
+
+    dst = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    if lines is not None:
+        for i in range(lines.shape[0]):
+            rho = lines[i][0][0]
+            theta = lines[i][0][1]
+            cos_t = math.cos(theta)
+            sin_t = math.sin(theta)
+            x0, y0 = rho * cos_t, rho * sin_t
+            alpha = 1000
+            pt1 = (int(x0 - alpha * sin_t), int(y0 + alpha * cos_t))
+            pt2 = (int(x0 + alpha * sin_t), int(y0 - alpha * cos_t))
+            cv2.line(dst, pt1, pt2, (0, 0, 255), 2, cv2.LINE_AA)
+
+    return dst
+
+
+def hough_segment(img):
+    lines = cv2.HoughLinesP(img, 1, math.pi / 180, 160, minLineLength=50, maxLineGap=5)
+
+    dst = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    if lines is not None:
+        for i in range(lines.shape[0]):
+            pt1 = (lines[i][0][0], lines[i][0][1])
+            pt2 = (lines[i][0][2], lines[i][0][3])
+            cv2.line(dst, pt1, pt2, (0, 0, 255), 2, cv2.LINE_AA)
+
+    return dst
+
+
+def auto_scan_image(path, name):
+
+    image = cv2.imread(path)
+    orig = image.copy()
+
+    r = 800.0 / image.shape[0]
+    dim = (int(image.shape[1] * r), 800)
+    image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    edged = cv2.Canny(gray, 70, 250)
+
+    dst = hough_segment(edged)
+
+    cnts, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]
+
+    for c in cnts:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+        if len(approx) == 4:
+            screenCnt = approx
+            break
+
+    if 'screenCnt' in locals():
+        pass
+    else:
+        print(name + '-------- 실패')
+        return
+
+    cv2.drawContours(image, [screenCnt], -1, (0, 0, 255), 2)
+
+    rect = order_points(screenCnt.reshape(4, 2) / r)
+
+    (topLeft, topRight, bottomRight, bottomLeft) = rect
+
+    w1 = abs(bottomRight[0] - bottomLeft[0])
+    w2 = abs(topRight[0] - topLeft[0])
+    h1 = abs(topRight[1] - bottomRight[1])
+    h2 = abs(topLeft[1] - bottomLeft[1])
+
+    maxWidth = max([w1, w2])
+    maxHeight = max([h1, h2])
+
+    dst = np.float32([[0, 0], [maxWidth-1, 0], [maxWidth-1, maxHeight-1], [0, maxHeight-1]])
+
+    M = cv2.getPerspectiveTransform(rect, dst)
+
+    warped = cv2.warpPerspective(orig, M, (int(maxWidth), int(maxHeight)))
+
+    print(name + '-------- 성공')
+
+
+def perspective_transform(image):
+    orig = image.copy()
+
+    r = 800.0 / image.shape[0]
+    dim = (int(image.shape[1] * r), 800)
+    image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # # filter2D 블러
+    # kernel = np.ones((5, 5), np.float32) / 25
+    # gray = cv2.filter2D(gray, -1, kernel)
+    #
+    # # 평균 블러
+    # gray = cv2.blur(gray,(3,3))
+
+    # 가우시안 블러
+    # gray = cv2.GaussianBlur(gray, (7, 7), 0)
+    # gray = cv2.GaussianBlur(gray, (0, 0), 1)
+    #
+    # # 미디안 블러
+    # gray = cv2.medianBlur(gray, 9)
+    #
+    # # bilateralFilter 블러
+    # gray = cv2.bilateralFilter(gray, -1, 75, 75)
+    # gray = cv2.bilateralFilter(gray, -1, 10, 5)
+    # gray = cv2.bilateralFilter(gray, -1, 10, 5)
+
+    # 소벨 에지
+    # edged = cv2.Sobel(gray, cv2.CV_32FC1, 1, 0)
+    # edged = cv2.Sobel(edged, cv2.CV_32FC1, 0, 1)
+
+    #케니 에지
+    # edged = cv2.Canny(gray, 70, 250)
+    # edged = cv2.Canny(gray, 50, 100)
+    # edged = cv2.Canny(gray, 10, 20)
+
+    gray = cv2.GaussianBlur(gray, (0, 0), 1)
+
+    # 양방향 필터 Bilateral Filter
+    # gray = cv2.bilateralFilter(gray, 9, 75, 75, borderType=cv2.BORDER_DEFAULT)
+    gray = cv2.bilateralFilter(gray, -1, 10, 5)
+
+    # 적응형 이진화 Adaptive Threshold
+    gray = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 13, 0)
+
+    # Border 생성
+    # gray = cv2.copyMakeBorder(gray, 5, 5, 5, 5, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+    # 캐니 에지 검출 Canny edge detection 임계값 50
+    canny_img = cv2.Canny(gray, 10, 20)
+
+    # 모폴로지 팽창 Dilate an image
+    kernel = np.ones((3, 3), np.uint8)
+    canny_img = cv2.dilate(canny_img, kernel)
+
+    # 외곽선 검출 Find contours
+    final_contours = []
+    contours, hierarchy = cv2.findContours(canny_img.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # 임계값 100 이하의 외곽선 제거
+    for i in range(len(contours)):
+        if len(contours[i]) > 100:
+            final_contours.append(contours[i])
+
+    # 검출 된 외각선 그리기
+    nee = np.zeros((gray.shape[0], gray.shape[1], 3), np.uint8)
+
+    for i in range(len(contours)):
+        cv2.drawContours(nee, contours, i, (255, 255, 255), cv2.FILLED, 8)
+
+    # 임계값 제거한 외각선 그리기
+    contours = final_contours
+
+    nee_thres = np.zeros((gray.shape[0], gray.shape[1], 3), np.uint8)
+
+    for i in range(len(contours)):
+        cv2.drawContours(nee_thres, contours, i, (255, 255, 255), cv2.FILLED, 8)
+
+    # 그레이스케일 Grayscale
+    nee_gray = cv2.cvtColor(nee_thres, cv2.COLOR_BGR2GRAY)
+    contours, hierarchy = cv2.findContours(nee_gray.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE, offset=(0, 0))
+
+    # 모폴로지 침식 Erode
+    image_eroded_with_5x5_kernel = cv2.erode(nee_gray, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)))
+
+    # 외각선 검출 Find Contours
+    contours, hierarchy = cv2.findContours(image_eroded_with_5x5_kernel.copy(), cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_NONE)  # Find contours
+
+    # 가장 큰 면적으로 가장 큰 윤곽 찾기
+    max_contour_id, max_area_val = 0, 0.0
+
+    for i in range(len(contours)):
+        if max_area_val < cv2.contourArea(contours[i]):
+            max_contour_id = i
+            max_area_val = cv2.contourArea(contours[i])
+
+    # 가장 큰 외각선으로 그리기
+    dy = np.zeros((gray.shape[0], gray.shape[1]), np.uint8)
+    cv2.drawContours(dy, contours, max_contour_id, (255, 255, 255), cv2.FILLED, 8, maxLevel=0)
+
+    edged = cv2.Canny(dy, 10, 20)
+
+    cnts, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]
+
+    for c in cnts:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+        if len(approx) == 4:
+            screenCnt = approx
+            break
+
+    if 'screenCnt' in locals():
+        pass
+    else:
+        return orig
+
+    imageSize = edged.shape[0] * edged.shape[1]
+    if cv2.contourArea(screenCnt) / imageSize < 0.1:
+        return orig
+
+    cv2.drawContours(image, [screenCnt], -1, (0, 0, 255), 2)
+
+    rect = order_points(screenCnt.reshape(4, 2) / r)
+
+    (topLeft, topRight, bottomRight, bottomLeft) = rect
+
+    w1 = abs(bottomRight[0] - bottomLeft[0])
+    w2 = abs(topRight[0] - topLeft[0])
+    h1 = abs(topRight[1] - bottomRight[1])
+    h2 = abs(topLeft[1] - bottomLeft[1])
+
+    maxWidth = max([w1, w2])
+    maxHeight = max([h1, h2])
+
+    dst = np.float32([[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]])
+
+    M = cv2.getPerspectiveTransform(rect, dst)
+
+    warped = cv2.warpPerspective(orig, M, (int(maxWidth), int(maxHeight)))
+
+    return warped
+
+
 if __name__ == "__main__":
-    input_dir = 'C:/Users/home/Desktop/perspect/img/'
-    output_dir = 'C:/Users/home/Desktop/perspect/result/'
-    file_list = os.listdir(input_dir)
+    input_dir = ''
 
     for path in os.listdir(input_dir):
-        img = cv2.imread(input_dir + path)
-        result = perspective(img)
-        cv2.imwrite(output_dir + path, result)
+        perspective_transform(input_dir + path, path.split('.')[0])
 
-    # dll = c.windll.LoadLibrary('perspective_final.dll')
-    # for path in os.listdir(input_dir):
-    #     myfunc = dll['perspective']
-    #     myfunc.argtypes = (c.c_char_p, c.c_char_p)
-    #     myfunc.restype = c.c_int
-    #     myfunc(b'C:/Users/home/Desktop/perspect/img/' + path.encode(), b'C:/Users/home/Desktop/perspect/resultDll/' + path.encode())
